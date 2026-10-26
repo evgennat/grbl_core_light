@@ -1,0 +1,12 @@
+[project]
+name = "grbl-core"
+version = "0.1.0"
+description = "Потоковое ядро jog/G-code для grbl-Mega-5X и DM542"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+keyboard = ["pynput>=1.7"]
+
+[tool.setuptools.packages.find]
+include = ["grbl_core*"]

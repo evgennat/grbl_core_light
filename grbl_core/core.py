@@ -480,7 +480,7 @@ class GrblCore:
             self._link.jog_cancel()
             self._held_event.set()
 
-    def _plan(self, held: dict[str, int]) -> tuple[str | None, float]:
+    def _plan(self, held: dict[str, int], distance: float | None = None) -> tuple[str | None, float]:
         with self._axes_lock:
             specs = {
                 axis.name: axis
@@ -494,7 +494,7 @@ class GrblCore:
             axis = specs.get(name)
             if not direction or axis is None:
                 continue
-            room = axis.continuous_window
+            room = axis.continuous_window if distance is None else distance
             if axis.max_travel > 0 and status is not None:
                 pos = status.mpos.get(name, 0.0)
                 if direction > 0:
@@ -514,6 +514,47 @@ class GrblCore:
         return f"$J=G91 {body} F{feed:.1f}", duration
 
     def _jog_loop(self) -> None:
+        sent_gen = None
+        pace = 0.05
+        while not self._stop.is_set():
+            self._held_event.wait(pace)
+            if self._stop.is_set():
+                break
+            self._held_event.clear()
+            try:
+                held, gen = self._snapshot()
+                link = self._link
+                if link is None:
+                    break
+                if not held:
+                    if sent_gen is not None:
+                        link.jog_cancel()
+                        sent_gen = None
+                    pace = 0.05
+                    continue
+                if sent_gen == gen:
+                    pace = 0.05
+                    continue
+                if sent_gen is not None:
+                    link.jog_cancel()
+                command, _duration = self._plan(held, distance=500)
+                if not command:
+                    pace = 0.05
+                    continue
+                self._log(command)
+                reply = link.command(command, timeout=2.0)
+                if not reply.ok:
+                    self._log(f"jog отклонён: {reply.text}")
+                    sent_gen = None
+                    pace = 0.2
+                    continue
+                sent_gen = gen
+                pace = 0.05
+            except Exception as exc:
+                sent_gen = None
+                self._log(f"jog: {exc}")
+                pace = 0.2
+
         active: dict[str, int] = {}
         saw_jog = False
         pace = 0.1

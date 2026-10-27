@@ -31,14 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from grbl_core import GrblCore
 
 KEYS = {
-    "w": ("Y", +1),
-    "s": ("Y", -1),
-    "a": ("X", -1),
-    "d": ("X", +1),
-    "q": ("Z", +1),
-    "e": ("Z", -1),
-    "r": ("A", +1),
-    "f": ("A", -1),
+    "a": ("A", -1),  # ось X станка
+    "d": ("A", +1),
+    "w": ("Y", +1),  # вверх
+    "s": ("Y", -1),  # вниз
+    "q": ("Z", +1),  # портал от себя
+    "e": ("Z", -1),  # портал на себя
+    "r": ("X", +1),  # стол
+    "f": ("X", -1),
 }
 
 
@@ -62,7 +62,7 @@ def demo(cnc: GrblCore) -> None:
 def run_keyboard(cnc: GrblCore) -> None:
     from pynput import keyboard
 
-    mode = {"hold": True}
+    mode = {"hold": False}
     pressed: set[str] = set()
 
     def show() -> None:
@@ -150,7 +150,14 @@ def main() -> None:
     cnc = GrblCore(port=args.port, baud=args.baud, simulate=args.simulate)
     cnc.on_log = lambda message: print(message)
     cnc.connect()
-    cnc.apply_machine()
+    cnc.set_step("X", 5)
+    cnc.set_feed("X", 800)
+    cnc.set_step("A", 5)
+    cnc.set_feed("A", 600)
+    cnc.set_step("Y", 20)
+    cnc.set_feed("Y", 800)
+    cnc.set_step("Z", 40)
+    cnc.set_feed("Z", 800)
     try:
         if args.demo:
             demo(cnc)

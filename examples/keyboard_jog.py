@@ -25,6 +25,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -120,8 +121,16 @@ def run_keyboard(cnc: GrblCore) -> None:
         if char is None:
             return None
         pressed.discard(char)
-        if mode["hold"] and char in KEYS:
-            cnc.release(KEYS[char][0])
+        if not (mode["hold"] and char in KEYS):
+            return None
+        axis = KEYS[char][0]
+
+        def later() -> None:
+            if char in pressed:
+                return
+            cnc.release(axis)
+
+        threading.Timer(0.08, later).start()
         return None
 
     show()

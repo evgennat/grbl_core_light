@@ -62,7 +62,7 @@ def demo(cnc: GrblCore) -> None:
 def run_keyboard(cnc: GrblCore) -> None:
     from pynput import keyboard
 
-    mode = {"hold": False}
+    mode = {"hold": True}
     pressed: set[str] = set()
 
     def show() -> None:

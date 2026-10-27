@@ -568,7 +568,7 @@ class GrblCore:
                     pace = 0.3 if not reply.ok else 0.05
                     continue
                 motion_live = True
-                pace = max(0.15, duration * 0.92)
+                pace = duration + 0.25
             except Exception as exc:
                 motion_live = False
                 if self._link is not None:

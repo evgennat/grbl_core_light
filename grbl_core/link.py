@@ -318,7 +318,6 @@ class GrblLink:
                 return self._acks.get(timeout=0.05)
             except queue.Empty:
                 continue
-        self.jog_cancel()
         return Reply(False, "timeout")
 
     def _read_loop(self) -> None:

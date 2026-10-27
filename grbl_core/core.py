@@ -520,7 +520,8 @@ class GrblCore:
     def _jog_loop(self) -> None:
         active_gen = self._epoch()
         motion_live = False
-        pace = 0.2
+        saw_run = False
+        pace = 0.15
         while not self._stop.is_set():
             self._held_event.wait(pace)
             if self._stop.is_set():
@@ -531,46 +532,60 @@ class GrblCore:
                 link = self._link
                 if link is None:
                     break
-                if gen != active_gen:
-                    if motion_live:
-                        link.polling = False
-                        link.jog_cancel()
-                        motion_live = False
-                        time.sleep(0.2)
-                    active_gen = gen
+                link.polling = True
                 if not held:
-                    link.polling = True
+                    motion_live = False
+                    saw_run = False
+                    active_gen = gen
                     pace = 0.2
                     continue
-                if self._epoch() != gen:
-                    pace = 0.05
-                    continue
-                command, duration = self._plan(held)
-                if not command:
+                if gen != active_gen:
+                    motion_live = False
+                    saw_run = False
+                    active_gen = gen
+                if not motion_live:
+                    if self._epoch() != gen:
+                        pace = 0.05
+                        continue
+                    command, _duration = self._plan(held)
+                    if not command:
+                        pace = 0.1
+                        continue
+                    self._log(command)
+                    reply = link.command(command, timeout=2.0, epoch_fn=self._epoch, epoch=gen)
+                    if self._epoch() != gen or not reply.ok:
+                        motion_live = False
+                        if reply.text.startswith("ALARM"):
+                            link.polling = False
+                            time.sleep(0.4)
+                            link.write_raw(b"\x18")
+                            time.sleep(0.4)
+                            link.command("$X", timeout=2.0)
+                            self._log("блокировка снята")
+                            link.polling = True
+                            pace = 0.5
+                            continue
+                        if not reply.ok and reply.text != "cancelled":
+                            self._log(f"jog отклонён: {reply.text}")
+                            pace = 0.4
+                            continue
+                        pace = 0.05
+                        continue
+                    motion_live = True
+                    saw_run = False
                     pace = 0.1
                     continue
-                link.polling = False
-                reply = link.command(command, timeout=2.0, epoch_fn=self._epoch, epoch=gen)
-                if self._epoch() != gen or not reply.ok:
+                status = link.get_status()
+                if status is not None and status.state == "Jog":
+                    saw_run = True
+                elif saw_run and status is not None and status.state == "Idle":
                     motion_live = False
-                    if reply.text.startswith("ALARM"):
-                        link.polling = False
-                        time.sleep(0.4)
-                        link.write_raw(b"\x18")
-                        time.sleep(0.4)
-                        link.command("$X", timeout=2.0)
-                        self._log("блокировка снята")
-                        link.polling = True
-                        pace = 0.8
-                        continue
-                    if not reply.ok and reply.text != "cancelled":
-                        self._log(f"jog отклонён: {reply.text}")
-                    pace = 0.3 if not reply.ok else 0.05
+                    pace = 0.05
                     continue
-                motion_live = True
-                pace = duration + 0.25
+                pace = 0.1
             except Exception as exc:
                 motion_live = False
+                saw_run = False
                 if self._link is not None:
                     self._link.polling = True
                 self._log(f"jog: {exc}")

@@ -458,8 +458,7 @@ class GrblCore:
         name = name.upper()
         new = 0 if direction == 0 else (1 if direction > 0 else -1)
         with self._held_lock:
-            old_map = dict(self._held)
-            old = old_map.get(name, 0)
+            old = self._held.get(name, 0)
             if old == new:
                 return
             if name not in self.axes and new != 0:
@@ -469,9 +468,6 @@ class GrblCore:
             else:
                 self._held[name] = new
             self._jog_generation += 1
-            had_motion = bool(old_map)
-        if had_motion:
-            self._link.jog_cancel()
         self._held_event.set()
 
     def _retarget(self) -> None:
@@ -518,74 +514,64 @@ class GrblCore:
         return f"$J=G91 {body} F{feed:.1f}", duration
 
     def _jog_loop(self) -> None:
-        active_gen = self._epoch()
-        motion_live = False
-        saw_run = False
-        pace = 0.15
+        commanded: dict[str, int] = {}
+        saw_jog = False
+        pace = 0.1
         while not self._stop.is_set():
             self._held_event.wait(pace)
             if self._stop.is_set():
                 break
             self._held_event.clear()
             try:
-                held, gen = self._snapshot()
+                held, _gen = self._snapshot()
                 link = self._link
                 if link is None:
                     break
                 link.polling = True
-                if not held:
-                    motion_live = False
-                    saw_run = False
-                    active_gen = gen
-                    pace = 0.2
-                    continue
-                if gen != active_gen:
-                    motion_live = False
-                    saw_run = False
-                    active_gen = gen
-                if not motion_live:
-                    if self._epoch() != gen:
-                        pace = 0.05
-                        continue
-                    command, _duration = self._plan(held)
-                    if not command:
-                        pace = 0.1
-                        continue
-                    self._log(command)
-                    reply = link.command(command, timeout=2.0, epoch_fn=self._epoch, epoch=gen)
-                    if self._epoch() != gen or not reply.ok:
-                        motion_live = False
-                        if reply.text.startswith("ALARM"):
-                            link.polling = False
-                            time.sleep(0.4)
-                            link.write_raw(b"\x18")
-                            time.sleep(0.4)
-                            link.command("$X", timeout=2.0)
-                            self._log("блокировка снята")
-                            link.polling = True
-                            pace = 0.5
-                            continue
-                        if not reply.ok and reply.text != "cancelled":
-                            self._log(f"jog отклонён: {reply.text}")
-                            pace = 0.4
-                            continue
-                        pace = 0.05
-                        continue
-                    motion_live = True
-                    saw_run = False
+                status = link.get_status()
+                state = status.state if status is not None else None
+                if state == "Jog":
+                    saw_jog = True
+                if held == commanded:
+                    if saw_jog and state == "Idle":
+                        commanded = {}
+                        saw_jog = False
                     pace = 0.1
                     continue
-                status = link.get_status()
-                if status is not None and status.state == "Jog":
-                    saw_run = True
-                elif saw_run and status is not None and status.state == "Idle":
-                    motion_live = False
-                    pace = 0.05
+                if commanded or state == "Jog":
+                    link.jog_cancel()
+                    commanded = {}
+                    saw_jog = False
+                    pace = 0.1
                     continue
+                if not held:
+                    pace = 0.2
+                    continue
+                command, _duration = self._plan(held)
+                if not command:
+                    pace = 0.1
+                    continue
+                self._log(command)
+                reply = link.command(command, timeout=2.0)
+                if not reply.ok:
+                    if reply.text.startswith("ALARM"):
+                        link.polling = False
+                        time.sleep(0.4)
+                        link.write_raw(b"\x18")
+                        time.sleep(0.4)
+                        link.command("$X", timeout=2.0)
+                        self._log("блокировка снята")
+                        link.polling = True
+                    else:
+                        self._log(f"jog отклонён: {reply.text}")
+                    pace = 0.4
+                    continue
+                commanded = dict(held)
+                saw_jog = False
                 pace = 0.1
             except Exception as exc:
-                motion_live = False
-                saw_run = False
+                commanded = {}
+                saw_jog = False
                 if self._link is not None:
                     self._link.polling = True
                 self._log(f"jog: {exc}")

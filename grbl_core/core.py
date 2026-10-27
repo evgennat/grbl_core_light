@@ -241,6 +241,7 @@ class GrblCore:
         reply = self._link.command(f"$J=G91 {name}{distance:.4f} F{feed:.1f}", timeout=2.0)
         if not reply.ok:
             raise GrblError(reply.text)
+        time.sleep(abs(distance) / feed * 60.0 + 0.4)
         return reply
 
     def hold(self, name: str, direction: int) -> None:

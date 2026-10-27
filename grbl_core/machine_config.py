@@ -54,7 +54,7 @@ BENCH_MODE = True              # CNC_BENCH, 1/0
 
 AXES = {
     "X": {
-        "kind": "linear",
+        "kind": "rotary",
         "pitch_mm": 5.0,             # CNC_X_PITCH
         "gear_ratio": 1.0,           # CNC_X_GEAR
         "microstep": 8,              # CNC_X_MICROSTEP
@@ -99,8 +99,8 @@ AXES = {
         "invert": False,
     },
     "A": {
-        "kind": "rotary",
-        "pitch_mm": 0.0,
+        "kind": "linear",
+        "pitch_mm": 5.0,
         "gear_ratio": 1.0,           # CNC_A_GEAR, оборотов мотора на оборот стола
         "microstep": 8,
         "motor_full_steps": 200,

@@ -555,6 +555,11 @@ class GrblCore:
                 reply = link.command(command, timeout=2.0, epoch_fn=self._epoch, epoch=gen)
                 if self._epoch() != gen or not reply.ok:
                     motion_live = False
+                    if reply.text.startswith("ALARM"):
+                        link.command("$X", timeout=2.0)
+                        self._log("блокировка снята")
+                        pace = 0.6
+                        continue
                     if not reply.ok and reply.text != "cancelled":
                         self._log(f"jog отклонён: {reply.text}")
                     pace = 0.2 if not reply.ok else 0.04

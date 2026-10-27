@@ -534,8 +534,13 @@ class GrblCore:
                 if gen != active_gen:
                     if motion_live:
                         link.jog_cancel()
-                        link.command("G4P0", timeout=0.8)
                         motion_live = False
+                        deadline = time.time() + 1.5
+                        while time.time() < deadline:
+                            status = link.get_status()
+                            if status is not None and status.state != "Jog":
+                                break
+                            time.sleep(0.05)
                     active_gen = gen
                 if not held:
                     pace = 0.2
@@ -555,7 +560,7 @@ class GrblCore:
                     pace = 0.2 if not reply.ok else 0.04
                     continue
                 motion_live = True
-                pace = max(0.05, duration * 0.7)
+                pace = max(0.05, duration * 0.45)
             except Exception as exc:
                 motion_live = False
                 self._log(f"jog: {exc}")

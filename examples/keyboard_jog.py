@@ -165,12 +165,9 @@ def main() -> None:
     cnc.connect()
     cnc.set_step("X", 5)
     cnc.set_feed("X", 300)
-    cnc.set_step("A", 5)
-    cnc.set_feed("A", 300)
-    cnc.set_step("Y", 10)
-    cnc.set_feed("Y", 300)
-    cnc.set_step("Z", 20)
-    cnc.set_feed("Z", 300)
+    cnc.configure("A", step=20, feed=1000, continuous_window=60)
+    cnc.configure("Y", step=40, feed=1200, continuous_window=80)
+    cnc.configure("Z", step=50, feed=900, continuous_window=50)
     try:
         if args.demo:
             demo(cnc)

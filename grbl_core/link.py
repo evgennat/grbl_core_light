@@ -235,6 +235,7 @@ class GrblLink:
         self.on_alarm = None
         self.on_info = None
         self.poll_interval = 0.1
+        self.polling = True
         self._status_lock = threading.Lock()
         self._line_lock = threading.Lock()
         self._io_lock = threading.Lock()
@@ -397,6 +398,8 @@ class GrblLink:
 
     def _poll_loop(self) -> None:
         while not self._stop.wait(self.poll_interval):
+            if not self.polling:
+                continue
             try:
                 self.status_query()
             except Exception:

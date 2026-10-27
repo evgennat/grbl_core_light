@@ -533,41 +533,46 @@ class GrblCore:
                     break
                 if gen != active_gen:
                     if motion_live:
+                        link.polling = False
                         link.jog_cancel()
                         motion_live = False
-                        deadline = time.time() + 1.5
-                        while time.time() < deadline:
-                            status = link.get_status()
-                            if status is not None and status.state != "Jog":
-                                break
-                            time.sleep(0.05)
+                        time.sleep(0.2)
                     active_gen = gen
                 if not held:
+                    link.polling = True
                     pace = 0.2
                     continue
                 if self._epoch() != gen:
-                    pace = 0.02
+                    pace = 0.05
                     continue
                 command, duration = self._plan(held)
                 if not command:
                     pace = 0.1
                     continue
+                link.polling = False
                 reply = link.command(command, timeout=2.0, epoch_fn=self._epoch, epoch=gen)
                 if self._epoch() != gen or not reply.ok:
                     motion_live = False
                     if reply.text.startswith("ALARM"):
+                        link.polling = False
+                        time.sleep(0.4)
+                        link.write_raw(b"\x18")
+                        time.sleep(0.4)
                         link.command("$X", timeout=2.0)
                         self._log("блокировка снята")
-                        pace = 0.6
+                        link.polling = True
+                        pace = 0.8
                         continue
                     if not reply.ok and reply.text != "cancelled":
                         self._log(f"jog отклонён: {reply.text}")
-                    pace = 0.2 if not reply.ok else 0.04
+                    pace = 0.3 if not reply.ok else 0.05
                     continue
                 motion_live = True
-                pace = max(0.05, duration * 0.45)
+                pace = max(0.15, duration * 0.92)
             except Exception as exc:
                 motion_live = False
+                if self._link is not None:
+                    self._link.polling = True
                 self._log(f"jog: {exc}")
                 pace = 0.3
 

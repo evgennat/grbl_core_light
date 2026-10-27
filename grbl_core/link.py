@@ -290,13 +290,7 @@ class GrblLink:
             self._discard_acks()
             with self._io_lock:
                 self._ser.write((line + "\n").encode("ascii", "ignore"))
-            superseded = epoch_fn is not None and epoch is not None and epoch_fn() != epoch
-            if superseded:
-                self.jog_cancel()
-            reply = self._wait_ack(timeout)
-            if superseded:
-                return Reply(False, "cancelled")
-            return reply
+            return self._wait_ack(timeout, epoch_fn, epoch)
 
     def get_status(self) -> Status | None:
         with self._status_lock:
@@ -309,9 +303,12 @@ class GrblLink:
             except queue.Empty:
                 return
 
-    def _wait_ack(self, timeout: float) -> Reply:
+    def _wait_ack(self, timeout: float, epoch_fn=None, epoch=None) -> Reply:
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if epoch_fn is not None and epoch is not None and epoch_fn() != epoch:
+                self.jog_cancel()
+                return Reply(False, "cancelled")
             alarm = self.alarm
             if alarm:
                 self.alarm = None
@@ -320,6 +317,7 @@ class GrblLink:
                 return self._acks.get(timeout=0.05)
             except queue.Empty:
                 continue
+        self.jog_cancel()
         return Reply(False, "timeout")
 
     def _read_loop(self) -> None:

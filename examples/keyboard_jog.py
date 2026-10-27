@@ -128,6 +128,10 @@ def run_keyboard(cnc: GrblCore) -> None:
         def later() -> None:
             if char in pressed:
                 return
+            for other, (name, direction) in KEYS.items():
+                if other != char and other in pressed and name == axis:
+                    cnc.hold(name, direction)
+                    return
             cnc.release(axis)
 
         threading.Timer(0.08, later).start()

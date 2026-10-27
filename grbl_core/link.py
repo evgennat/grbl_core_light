@@ -341,7 +341,10 @@ class GrblLink:
                 chunk, pending = pending.split("\n", 1)
                 line = chunk.strip()
                 if line:
-                    self._dispatch(line)
+                    try:
+                        self._dispatch(line)
+                    except Exception:
+                        continue
 
     def _dispatch(self, line: str) -> None:
         if line == "ok" or line.startswith("ok"):

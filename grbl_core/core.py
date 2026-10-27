@@ -514,7 +514,7 @@ class GrblCore:
         return f"$J=G91 {body} F{feed:.1f}", duration
 
     def _jog_loop(self) -> None:
-        commanded: dict[str, int] = {}
+        active: dict[str, int] = {}
         saw_jog = False
         pace = 0.1
         while not self._stop.is_set():
@@ -532,45 +532,54 @@ class GrblCore:
                 state = status.state if status is not None else None
                 if state == "Jog":
                     saw_jog = True
-                if held == commanded:
+                if not held:
+                    if active or state == "Jog":
+                        link.jog_cancel()
+                    active = {}
+                    saw_jog = False
+                    pace = 0.15
+                    continue
+                if active == held:
                     if saw_jog and state == "Idle":
-                        commanded = {}
+                        active = {}
                         saw_jog = False
                     pace = 0.1
                     continue
-                if commanded or state == "Jog":
+                if active or state == "Jog":
                     link.jog_cancel()
-                    commanded = {}
+                    active = {}
                     saw_jog = False
                     pace = 0.1
-                    continue
-                if not held:
-                    pace = 0.2
                     continue
                 command, _duration = self._plan(held)
                 if not command:
                     pace = 0.1
                     continue
                 self._log(command)
-                reply = link.command(command, timeout=2.0)
+                reply = link.command(command, timeout=3.0)
                 if not reply.ok:
-                    if reply.text.startswith("ALARM"):
-                        link.polling = False
-                        time.sleep(0.4)
-                        link.write_raw(b"\x18")
-                        time.sleep(0.4)
-                        link.command("$X", timeout=2.0)
-                        self._log("блокировка снята")
-                        link.polling = True
-                    else:
-                        self._log(f"jog отклонён: {reply.text}")
-                    pace = 0.4
+                    self._log(f"jog отклонён: {reply.text}")
+                    while not self._stop.is_set():
+                        still, _g = self._snapshot()
+                        if not still:
+                            break
+                        self._held_event.wait(0.1)
+                    link.polling = False
+                    time.sleep(0.3)
+                    link.write_raw(b"\x18")
+                    time.sleep(0.4)
+                    link.command("$X", timeout=2.0)
+                    self._log("блокировка снята")
+                    link.polling = True
+                    active = {}
+                    saw_jog = False
+                    pace = 0.2
                     continue
-                commanded = dict(held)
+                active = dict(held)
                 saw_jog = False
                 pace = 0.1
             except Exception as exc:
-                commanded = {}
+                active = {}
                 saw_jog = False
                 if self._link is not None:
                     self._link.polling = True

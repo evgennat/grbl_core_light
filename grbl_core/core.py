@@ -92,12 +92,14 @@ class GrblCore:
         link.on_status = self._relay_status
         link.on_alarm = self._relay_alarm
         link.on_info = self._relay_info
-        link.start()
         self._link = link
+        if not self.simulate:
+            time.sleep(2.5)
+        link.start()
         try:
-            link.write_raw(b"\r\n\r\n")
-            time.sleep(0.15 if self.simulate else 0.4)
-            link.command("$X", timeout=2.0)
+            reply = link.command("$X", timeout=2.0)
+            if not reply.ok:
+                raise GrblError(reply.text or "нет ответа на $X")
         except Exception:
             self.close()
             raise

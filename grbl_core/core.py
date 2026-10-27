@@ -555,7 +555,7 @@ class GrblCore:
                     pace = 0.2 if not reply.ok else 0.04
                     continue
                 motion_live = True
-                pace = max(0.04, min(0.4, duration * 0.45))
+                pace = max(0.05, duration * 0.7)
             except Exception as exc:
                 motion_live = False
                 self._log(f"jog: {exc}")

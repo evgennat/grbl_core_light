@@ -323,6 +323,7 @@ class GrblLink:
         return Reply(False, "timeout")
 
     def _read_loop(self) -> None:
+        pending = ""
         while not self._stop.is_set():
             try:
                 raw = self._ser.readline()
@@ -334,11 +335,15 @@ class GrblLink:
             if not raw:
                 continue
             if isinstance(raw, bytes):
-                line = raw.decode("ascii", "ignore").strip()
+                piece = raw.decode("ascii", "ignore")
             else:
-                line = str(raw).strip()
-            if line:
-                self._dispatch(line)
+                piece = str(raw)
+            pending += piece
+            while "\n" in pending:
+                chunk, pending = pending.split("\n", 1)
+                line = chunk.strip()
+                if line:
+                    self._dispatch(line)
 
     def _dispatch(self, line: str) -> None:
         if line == "ok" or line.startswith("ok"):

@@ -514,7 +514,10 @@ class GrblCore:
         return f"$J=G91 {body} F{feed:.1f}", duration
 
     def _jog_loop(self) -> None:
-        sent_gen = None
+        latched: dict[str, int] = {}
+        sent_gen: int | None = None
+        wait_idle_since: float | None = None
+        empty_since: float | None = None
         pace = 0.05
         while not self._stop.is_set():
             self._held_event.wait(pace)
@@ -526,106 +529,75 @@ class GrblCore:
                 link = self._link
                 if link is None:
                     break
+                link.polling = True
+                status = link.get_status()
+                state = status.state if status is not None else None
+                fresh_idle = (
+                    wait_idle_since is not None
+                    and status is not None
+                    and status.t > wait_idle_since
+                    and state != "Jog"
+                )
+                if fresh_idle:
+                    wait_idle_since = None
+                if wait_idle_since is not None:
+                    pace = 0.05
+                    continue
                 if not held:
-                    if sent_gen is not None:
-                        link.jog_cancel()
-                        sent_gen = None
+                    if latched or sent_gen is not None:
+                        now = time.time()
+                        if empty_since is None:
+                            empty_since = now
+                        elif now - empty_since >= 0.3 and (state == "Jog" or sent_gen is not None):
+                            link.jog_cancel()
+                            wait_idle_since = time.time()
+                            latched = {}
+                            sent_gen = None
+                            empty_since = None
                     pace = 0.05
                     continue
-                if sent_gen == gen:
+                empty_since = None
+                if held == latched and sent_gen == gen:
                     pace = 0.05
                     continue
-                if sent_gen is not None:
+                if sent_gen is not None or state == "Jog":
                     link.jog_cancel()
+                    wait_idle_since = time.time()
+                    sent_gen = None
+                    latched = {}
+                    pace = 0.05
+                    continue
                 command, _duration = self._plan(held, distance=500)
                 if not command:
                     pace = 0.05
                     continue
                 self._log(command)
-                reply = link.command(command, timeout=2.0)
+                reply = link.command(
+                    command, timeout=2.0, epoch_fn=self._epoch, epoch=gen
+                )
+                if reply.text == "cancelled" or self._epoch() != gen:
+                    wait_idle_since = time.time()
+                    sent_gen = None
+                    latched = {}
+                    pace = 0.05
+                    continue
                 if not reply.ok:
                     self._log(f"jog отклонён: {reply.text}")
+                    wait_idle_since = time.time()
                     sent_gen = None
-                    pace = 0.2
+                    latched = {}
+                    pace = 0.05
                     continue
                 sent_gen = gen
+                latched = dict(held)
                 pace = 0.05
             except Exception as exc:
                 sent_gen = None
+                latched = {}
+                wait_idle_since = None
+                empty_since = None
                 self._log(f"jog: {exc}")
                 pace = 0.2
-
-        active: dict[str, int] = {}
-        saw_jog = False
-        pace = 0.1
-        while not self._stop.is_set():
-            self._held_event.wait(pace)
-            if self._stop.is_set():
-                break
-            self._held_event.clear()
-            try:
-                held, _gen = self._snapshot()
-                link = self._link
-                if link is None:
-                    break
-                link.polling = True
-                status = link.get_status()
-                state = status.state if status is not None else None
-                if state == "Jog":
-                    saw_jog = True
-                if not held:
-                    if active or state == "Jog":
-                        link.jog_cancel()
-                    active = {}
-                    saw_jog = False
-                    pace = 0.15
-                    continue
-                if active == held:
-                    if saw_jog and state == "Idle":
-                        active = {}
-                        saw_jog = False
-                    pace = 0.1
-                    continue
-                if active or state == "Jog":
-                    link.jog_cancel()
-                    active = {}
-                    saw_jog = False
-                    pace = 0.1
-                    continue
-                command, _duration = self._plan(held)
-                if not command:
-                    pace = 0.1
-                    continue
-                self._log(command)
-                reply = link.command(command, timeout=3.0)
-                if not reply.ok:
-                    self._log(f"jog отклонён: {reply.text}")
-                    while not self._stop.is_set():
-                        still, _g = self._snapshot()
-                        if not still:
-                            break
-                        self._held_event.wait(0.1)
-                    link.polling = False
-                    time.sleep(0.3)
-                    link.write_raw(b"\x18")
-                    time.sleep(0.4)
-                    link.command("$X", timeout=2.0)
-                    self._log("блокировка снята")
-                    link.polling = True
-                    active = {}
-                    saw_jog = False
-                    pace = 0.2
-                    continue
-                active = dict(held)
-                saw_jog = False
-                pace = 0.1
-            except Exception as exc:
-                active = {}
-                saw_jog = False
-                if self._link is not None:
-                    self._link.polling = True
-                self._log(f"jog: {exc}")
-                pace = 0.3
 
     def _warn_rate(self, name: str, steps: float, feed: float) -> None:
         if exceeds_dm542(steps, feed):

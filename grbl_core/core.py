@@ -516,8 +516,9 @@ class GrblCore:
     def _jog_loop(self) -> None:
         latched: dict[str, int] = {}
         sent_gen: int | None = None
-        wait_idle_since: float | None = None
         empty_since: float | None = None
+        cancel_at: float | None = None
+        told = False
         pace = 0.05
         while not self._stop.is_set():
             self._held_event.wait(pace)
@@ -532,25 +533,30 @@ class GrblCore:
                 link.polling = True
                 status = link.get_status()
                 state = status.state if status is not None else None
-                fresh_idle = (
-                    wait_idle_since is not None
-                    and status is not None
-                    and status.t > wait_idle_since
-                    and state != "Jog"
-                )
-                if fresh_idle:
-                    wait_idle_since = None
-                if wait_idle_since is not None:
-                    pace = 0.05
-                    continue
+                if cancel_at is not None:
+                    if state != "Jog":
+                        cancel_at = None
+                        told = False
+                    elif time.time() - cancel_at >= 1.0:
+                        link.jog_cancel()
+                        cancel_at = time.time()
+                        if not told:
+                            self._log(f"жду остановку, сейчас {state}")
+                            told = True
+                        pace = 0.1
+                        continue
+                    else:
+                        pace = 0.05
+                        continue
                 if not held:
                     if latched or sent_gen is not None:
                         now = time.time()
                         if empty_since is None:
                             empty_since = now
-                        elif now - empty_since >= 0.3 and (state == "Jog" or sent_gen is not None):
-                            link.jog_cancel()
-                            wait_idle_since = time.time()
+                        elif now - empty_since >= 0.3:
+                            if state == "Jog":
+                                link.jog_cancel()
+                                cancel_at = time.time()
                             latched = {}
                             sent_gen = None
                             empty_since = None
@@ -558,44 +564,48 @@ class GrblCore:
                     continue
                 empty_since = None
                 if held == latched and sent_gen == gen:
-                    pace = 0.05
-                    continue
-                if sent_gen is not None or state == "Jog":
+                    if state == "Idle":
+                        latched = {}
+                        sent_gen = None
+                    else:
+                        pace = 0.05
+                        continue
+                if state == "Jog":
                     link.jog_cancel()
-                    wait_idle_since = time.time()
-                    sent_gen = None
+                    cancel_at = time.time()
                     latched = {}
+                    sent_gen = None
                     pace = 0.05
                     continue
-                command, _duration = self._plan(held, distance=500)
+                command, _duration = self._plan(held)
                 if not command:
-                    pace = 0.05
+                    pace = 0.1
                     continue
                 self._log(command)
                 reply = link.command(
                     command, timeout=2.0, epoch_fn=self._epoch, epoch=gen
                 )
                 if reply.text == "cancelled" or self._epoch() != gen:
-                    wait_idle_since = time.time()
-                    sent_gen = None
+                    cancel_at = time.time()
                     latched = {}
+                    sent_gen = None
                     pace = 0.05
                     continue
                 if not reply.ok:
                     self._log(f"jog отклонён: {reply.text}")
-                    wait_idle_since = time.time()
-                    sent_gen = None
                     latched = {}
-                    pace = 0.05
+                    sent_gen = None
+                    pace = 0.3
                     continue
                 sent_gen = gen
                 latched = dict(held)
                 pace = 0.05
             except Exception as exc:
-                sent_gen = None
                 latched = {}
-                wait_idle_since = None
+                sent_gen = None
+                cancel_at = None
                 empty_since = None
+                told = False
                 self._log(f"jog: {exc}")
                 pace = 0.2
 

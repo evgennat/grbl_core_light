@@ -29,7 +29,7 @@ import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from grbl_core import GrblCore
+from grbl_core import GrblCore, GrblError
 
 KEYS = {
     "a": ("X", -1),  # X−
@@ -41,6 +41,14 @@ KEYS = {
     "r": ("A", +1),  # стол A+
     "f": ("A", -1),  # стол A−
 }
+
+
+def _safe_jog_step(cnc: GrblCore, axis: str, direction: int) -> None:
+    """Запуск jog_step в фоне — не блокирует поток клавиатуры."""
+    try:
+        cnc.jog_step(axis, direction)
+    except GrblError:
+        pass  # ось уже едет или нет связи — молча пропускаем
 
 
 def demo(cnc: GrblCore) -> None:
@@ -91,7 +99,12 @@ def run_keyboard(cnc: GrblCore) -> None:
             if mode["hold"]:
                 cnc.hold(axis, direction)
             else:
-                cnc.jog_step(axis, direction)
+                # jog_step в отдельном потоке — не блокирует клавиатуру
+                threading.Thread(
+                    target=_safe_jog_step,
+                    args=(cnc, axis, direction),
+                    daemon=True,
+                ).start()
         elif char == "p":
             cnc.set_pump(not cnc.pump_is_on)
             print("помпа", "вкл" if cnc.pump_is_on else "выкл")

@@ -228,7 +228,12 @@ class GrblCore:
     # --- команды движения -------------------------------------------------
 
     def jog_step(self, name: str, direction: int = 1) -> Reply:
-        """Один шаг текущим `axis.step` и `axis.feed`. Не зависит от G90/G91."""
+        """Один шаг текущим `axis.step` и `axis.feed`. Не зависит от G90/G91.
+
+        Команда уходит на контроллер и возвращает управление сразу после `ok`.
+        Поток вызывающего (например, клавиатурный обработчик) не блокируется
+        на время физического движения оси.
+        """
         self._require()
         name = name.upper()
         with self._held_lock:
@@ -241,7 +246,8 @@ class GrblCore:
         reply = self._link.command(f"$J=G91 {name}{distance:.4f} F{feed:.1f}", timeout=2.0)
         if not reply.ok:
             raise GrblError(reply.text)
-        time.sleep(abs(distance) / feed * 60.0 + 0.4)
+        # Не блокируем вызывающий поток: GRBL выполняет кусок сам,
+        # а следующий jog_step можно слать сразу после ok.
         return reply
 
     def hold(self, name: str, direction: int) -> None:
@@ -519,7 +525,7 @@ class GrblCore:
         empty_since: float | None = None
         cancel_at: float | None = None
         told = False
-        pace = 0.05
+        pace = 0.03   # опрос 30 мс — быстрее реагирует на hold/release
         while not self._stop.is_set():
             self._held_event.wait(pace)
             if self._stop.is_set():
@@ -537,30 +543,30 @@ class GrblCore:
                     if state != "Jog":
                         cancel_at = None
                         told = False
-                    elif time.time() - cancel_at >= 1.0:
+                    elif time.time() - cancel_at >= 0.3:
                         link.jog_cancel()
                         cancel_at = time.time()
                         if not told:
                             self._log(f"жду остановку, сейчас {state}")
                             told = True
-                        pace = 0.1
+                        pace = 0.05
                         continue
                     else:
-                        pace = 0.05
+                        pace = 0.03
                         continue
                 if not held:
                     if latched or sent_gen is not None:
                         now = time.time()
                         if empty_since is None:
                             empty_since = now
-                        elif now - empty_since >= 0.3:
+                        elif now - empty_since >= 0.08:
                             if state == "Jog":
                                 link.jog_cancel()
                                 cancel_at = time.time()
                             latched = {}
                             sent_gen = None
                             empty_since = None
-                    pace = 0.05
+                    pace = 0.03
                     continue
                 empty_since = None
                 if held == latched and sent_gen == gen:

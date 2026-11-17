@@ -539,21 +539,32 @@ class GrblCore:
                 link.polling = True
                 status = link.get_status()
                 state = status.state if status is not None else None
+
+                # --- ожидание остановки после отмены jog ---
                 if cancel_at is not None:
                     if state != "Jog":
+                        # Контроллер встал — готовы слать следующую команду.
+                        # Не делаем continue: сразу проваливаемся дальше.
                         cancel_at = None
                         told = False
                     elif time.time() - cancel_at >= 0.3:
+                        # GRBL не реагирует — шлём 0x85 ещё раз
                         link.jog_cancel()
+                        link.status_query()   # сразу узнаём когда встанет
                         cancel_at = time.time()
                         if not told:
                             self._log(f"жду остановку, сейчас {state}")
                             told = True
-                        pace = 0.05
+                        pace = 0.01
                         continue
                     else:
-                        pace = 0.03
+                        # Всё ещё тормозит — активно запрашиваем статус,
+                        # не ждём следующего poll_interval
+                        link.status_query()
+                        pace = 0.01   # 10 мс до следующей проверки
                         continue
+
+                # --- нет зажатых осей ---
                 if not held:
                     if latched or sent_gen is not None:
                         now = time.time()
@@ -562,27 +573,36 @@ class GrblCore:
                         elif now - empty_since >= 0.08:
                             if state == "Jog":
                                 link.jog_cancel()
+                                link.status_query()   # сразу узнаём когда встанет
                                 cancel_at = time.time()
                             latched = {}
                             sent_gen = None
                             empty_since = None
                     pace = 0.03
                     continue
+
                 empty_since = None
+
+                # --- те же оси, тот же gen — ждём конца куска ---
                 if held == latched and sent_gen == gen:
                     if state == "Idle":
+                        # Текущий кусок закончился — сброс для переотправки
                         latched = {}
                         sent_gen = None
                     else:
-                        pace = 0.05
+                        pace = 0.03
                         continue
+
+                # --- нужна новая команда, но контроллер ещё едет ---
                 if state == "Jog":
                     link.jog_cancel()
+                    link.status_query()   # не ждём poll_interval — узнаём ASAP
                     cancel_at = time.time()
                     latched = {}
                     sent_gen = None
-                    pace = 0.05
+                    pace = 0.01   # минимальная пауза до проверки статуса
                     continue
+
                 command, _duration = self._plan(held)
                 if not command:
                     pace = 0.1
@@ -592,10 +612,12 @@ class GrblCore:
                     command, timeout=2.0, epoch_fn=self._epoch, epoch=gen
                 )
                 if reply.text == "cancelled" or self._epoch() != gen:
+                    # Epoch сменился пока ждали ok — _wait_ack уже отправил 0x85
+                    link.status_query()   # узнаём когда встанет
                     cancel_at = time.time()
                     latched = {}
                     sent_gen = None
-                    pace = 0.05
+                    pace = 0.01
                     continue
                 if not reply.ok:
                     self._log(f"jog отклонён: {reply.text}")
@@ -605,7 +627,7 @@ class GrblCore:
                     continue
                 sent_gen = gen
                 latched = dict(held)
-                pace = 0.05
+                pace = 0.03
             except Exception as exc:
                 latched = {}
                 sent_gen = None

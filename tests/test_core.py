@@ -105,6 +105,23 @@ class CoreTest(unittest.TestCase):
         self.cnc.release_all()
         self.assertGreater(self.cnc.sim.cancels, 0)
 
+    def test_direction_change_and_multiaxis(self):
+        # 1. Зажать X+
+        self.cnc.hold("X", +1)
+        self._wait_for(lambda: any(l.startswith("$J") and "X" in l for l in self.cnc.sim.lines))
+        # 2. Сменить на X- (обратное направление)
+        self.cnc.hold("X", -1)
+        self._wait_for(lambda: any(l.startswith("$J") and "X-" in l for l in self.cnc.sim.lines))
+        # 3. Добавить Y+ (движение по двум осям)
+        self.cnc.hold("Y", +1)
+        self._wait_for(lambda: any(l.startswith("$J") and "X-" in l and "Y" in l for l in self.cnc.sim.lines))
+        # 4. Отпустить X, оставить только Y+
+        self.cnc.release("X")
+        self._wait_for(lambda: any(l.startswith("$J") and "Y" in l and "X" not in l for l in self.cnc.sim.lines))
+        # 5. Стоп
+        self.cnc.release_all()
+        self.assertGreater(self.cnc.sim.cancels, 0)
+
     def test_scale_and_program(self):
         self.cnc.scale_steps(2)
         self.assertAlmostEqual(self.cnc.axis("X").step, 2.0)

@@ -73,6 +73,17 @@ def run_keyboard(cnc: GrblCore) -> None:
 
     mode = {"hold": True}
     pressed: set[str] = set()
+    release_timers: dict[str, threading.Timer] = {}
+
+    def cancel_timer(axis: str) -> None:
+        timer = release_timers.pop(axis, None)
+        if timer is not None:
+            timer.cancel()
+
+    def cancel_all_timers() -> None:
+        for timer in list(release_timers.values()):
+            timer.cancel()
+        release_timers.clear()
 
     def show() -> None:
         kind = "удержание" if mode["hold"] else "шаг"
@@ -85,9 +96,12 @@ def run_keyboard(cnc: GrblCore) -> None:
     def on_press(key):
         char = _char(key)
         if key == keyboard.Key.esc:
+            cancel_all_timers()
             cnc.close()
             return False
         if key == keyboard.Key.space:
+            cancel_all_timers()
+            pressed.clear()
             cnc.stop()
             print("стоп")
             return None
@@ -96,6 +110,7 @@ def run_keyboard(cnc: GrblCore) -> None:
         pressed.add(char)
         if char in KEYS:
             axis, direction = KEYS[char]
+            cancel_timer(axis)
             if mode["hold"]:
                 cnc.hold(axis, direction)
             else:
@@ -121,6 +136,8 @@ def run_keyboard(cnc: GrblCore) -> None:
             cnc.scale_feeds(2.0)
             show()
         elif char == "1":
+            cancel_all_timers()
+            pressed.clear()
             cnc.stop()
             mode["hold"] = False
             show()
@@ -137,8 +154,10 @@ def run_keyboard(cnc: GrblCore) -> None:
         if not (mode["hold"] and char in KEYS):
             return None
         axis = KEYS[char][0]
+        cancel_timer(axis)
 
         def later() -> None:
+            release_timers.pop(axis, None)
             if char in pressed:
                 return
             for other, (name, direction) in KEYS.items():
@@ -147,7 +166,11 @@ def run_keyboard(cnc: GrblCore) -> None:
                     return
             cnc.release(axis)
 
-        threading.Timer(0.08, later).start()
+        # 30 мс фильтрация typematic repeat вместо 80 мс
+        timer = threading.Timer(0.03, later)
+        timer.daemon = True
+        release_timers[axis] = timer
+        timer.start()
         return None
 
     show()

@@ -306,12 +306,8 @@ class GrblLink:
 
     def _wait_ack(self, timeout: float, epoch_fn=None, epoch=None) -> Reply:
         deadline = time.time() + timeout
-        # Проверяем epoch каждые 10 мс вместо 50 — быстрее реагируем на смену направления
         poll = 0.01
         while time.time() < deadline:
-            if epoch_fn is not None and epoch is not None and epoch_fn() != epoch:
-                self.jog_cancel()
-                return Reply(False, "cancelled")
             alarm = self.alarm
             if alarm:
                 self.alarm = None

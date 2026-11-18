@@ -522,15 +522,17 @@ class GrblCore:
     def _jog_loop(self) -> None:
         latched: dict[str, int] = {}
         sent_gen: int | None = None
-        empty_since: float | None = None
-        cancel_at: float | None = None
-        told = False
-        pace = 0.03   # опрос 30 мс — быстрее реагирует на hold/release
+        cancel_in_progress = False
+        cancel_time = 0.0
+        last_send_time = 0.0
+        last_duration = 0.0
+
         while not self._stop.is_set():
-            self._held_event.wait(pace)
+            self._held_event.wait(0.02)
             if self._stop.is_set():
                 break
             self._held_event.clear()
+
             try:
                 held, gen = self._snapshot()
                 link = self._link
@@ -540,102 +542,91 @@ class GrblCore:
                 status = link.get_status()
                 state = status.state if status is not None else None
 
-                # --- ожидание остановки после отмены jog ---
-                if cancel_at is not None:
-                    if state != "Jog":
-                        # Контроллер встал — готовы слать следующую команду.
-                        # Не делаем continue: сразу проваливаемся дальше.
-                        cancel_at = None
-                        told = False
-                    elif time.time() - cancel_at >= 0.3:
-                        # GRBL не реагирует — шлём 0x85 ещё раз
-                        link.jog_cancel()
-                        link.status_query()   # сразу узнаём когда встанет
-                        cancel_at = time.time()
-                        if not told:
-                            self._log(f"жду остановку, сейчас {state}")
-                            told = True
-                        pace = 0.01
+                # 1. Если ждем завершения отмены (торможения)
+                if cancel_in_progress:
+                    if state == "Idle":
+                        cancel_in_progress = False
+                    elif time.time() - cancel_time >= 1.5:
+                        # Таймаут ожидания Idle (1.5 с) — повторный запрос статуса
+                        link.status_query()
+                        cancel_time = time.time()
                         continue
                     else:
-                        # Всё ещё тормозит — активно запрашиваем статус,
-                        # не ждём следующего poll_interval
-                        link.status_query()
-                        pace = 0.01   # 10 мс до следующей проверки
+                        # Еще тормозит — ждем выхода в Idle
                         continue
 
-                # --- нет зажатых осей ---
+                # 2. Все оси отпущены
                 if not held:
-                    if latched or sent_gen is not None:
-                        now = time.time()
-                        if empty_since is None:
-                            empty_since = now
-                        elif now - empty_since >= 0.08:
-                            if state == "Jog":
-                                link.jog_cancel()
-                                link.status_query()   # сразу узнаём когда встанет
-                                cancel_at = time.time()
-                            latched = {}
-                            sent_gen = None
-                            empty_since = None
-                    pace = 0.03
-                    continue
-
-                empty_since = None
-
-                # --- те же оси, тот же gen — ждём конца куска ---
-                if held == latched and sent_gen == gen:
-                    if state == "Idle":
-                        # Текущий кусок закончился — сброс для переотправки
+                    if latched or state == "Jog":
+                        link.jog_cancel()
+                        link.status_query()
+                        cancel_in_progress = True
+                        cancel_time = time.time()
                         latched = {}
                         sent_gen = None
-                    else:
-                        pace = 0.03
+                    continue
+
+                # 3. Есть зажатые оси
+                # 3A. Оси/направление изменились или изменились параметры (gen != sent_gen)
+                if held != latched or gen != sent_gen:
+                    if state == "Jog":
+                        # Станок еще едет по старой команде — отменяем и ждем Idle
+                        link.jog_cancel()
+                        link.status_query()
+                        cancel_in_progress = True
+                        cancel_time = time.time()
+                        latched = {}
+                        sent_gen = None
                         continue
 
-                # --- нужна новая команда, но контроллер ещё едет ---
-                if state == "Jog":
-                    link.jog_cancel()
-                    link.status_query()   # не ждём poll_interval — узнаём ASAP
-                    cancel_at = time.time()
-                    latched = {}
-                    sent_gen = None
-                    pace = 0.01   # минимальная пауза до проверки статуса
+                    # Станок в Idle — отправляем новое движение
+                    command, duration = self._plan(held)
+                    if not command:
+                        continue
+                    self._log(command)
+                    reply = link.command(command, timeout=1.0)
+                    if reply.ok:
+                        latched = dict(held)
+                        sent_gen = gen
+                        last_send_time = time.time()
+                        last_duration = duration
+                    else:
+                        self._log(f"jog отклонён: {reply.text}")
+                        link.jog_cancel()
+                        link.status_query()
+                        cancel_in_progress = True
+                        cancel_time = time.time()
+                        latched = {}
+                        sent_gen = None
                     continue
 
-                command, _duration = self._plan(held)
-                if not command:
-                    pace = 0.1
+                # 3B. Те же оси и то же направление продолжают удерживаться
+                if state == "Idle":
+                    command, duration = self._plan(held)
+                    if not command:
+                        continue
+                    reply = link.command(command, timeout=1.0)
+                    if reply.ok:
+                        last_send_time = time.time()
+                        last_duration = duration
                     continue
-                self._log(command)
-                reply = link.command(
-                    command, timeout=2.0, epoch_fn=self._epoch, epoch=gen
-                )
-                if reply.text == "cancelled" or self._epoch() != gen:
-                    # Epoch сменился пока ждали ok — _wait_ack уже отправил 0x85
-                    link.status_query()   # узнаём когда встанет
-                    cancel_at = time.time()
-                    latched = {}
-                    sent_gen = None
-                    pace = 0.01
-                    continue
-                if not reply.ok:
-                    self._log(f"jog отклонён: {reply.text}")
-                    latched = {}
-                    sent_gen = None
-                    pace = 0.3
-                    continue
-                sent_gen = gen
-                latched = dict(held)
-                pace = 0.03
+
+                # Подкладывание следующего куска для плавности хода без остановок
+                if state == "Jog" and last_duration > 0.1:
+                    elapsed = time.time() - last_send_time
+                    if elapsed >= last_duration * 0.7:
+                        command, duration = self._plan(held)
+                        if command:
+                            reply = link.command(command, timeout=1.0)
+                            if reply.ok:
+                                last_send_time = time.time()
+                                last_duration = duration
+
             except Exception as exc:
                 latched = {}
                 sent_gen = None
-                cancel_at = None
-                empty_since = None
-                told = False
+                cancel_in_progress = False
                 self._log(f"jog: {exc}")
-                pace = 0.2
 
     def _warn_rate(self, name: str, steps: float, feed: float) -> None:
         if exceeds_dm542(steps, feed):

@@ -607,7 +607,13 @@ class GrblCore:
                         link.status_query()
                         continue
 
-                    # Станок в Idle — отправляем новое движение
+                    # state == None и latched не пуст — статус ещё не пришёл после отмены.
+                    # Не отправляем команду, пока не знаем реальное состояние станка.
+                    if state is None and latched:
+                        link.status_query()
+                        continue
+
+                    # Станок в Idle (или первый старт, latched пуст) — отправляем новое движение
                     command, duration = self._plan(held)
                     if not command:
                         continue

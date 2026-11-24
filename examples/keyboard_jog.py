@@ -15,8 +15,10 @@
   1 / 2     режим шага / режим удержания
   Esc       выход
 
-  python3 examples/keyboard_jog.py --simulate --demo
-  python3 examples/keyboard_jog.py --port /dev/ttyACM0
+При запуске спрашивает множители подачи и шага (или берёт из --speed / --step).
+Пример:
+  python3 examples/keyboard_jog.py --simulate
+  python3 examples/keyboard_jog.py --port COM3 --speed 2.0 --step 0.5
 """
 
 from __future__ import annotations
@@ -186,6 +188,24 @@ def _char(key):
         return None
 
 
+def _ask_multiplier(prompt: str, default: float) -> float:
+    """Спросить множитель у пользователя. Пустой ввод → default."""
+    while True:
+        try:
+            raw = input(f"{prompt} [по умолчанию {default:g}]: ").strip()
+            if raw == "":
+                return default
+            value = float(raw.replace(",", "."))
+            if value <= 0:
+                print("  Число должно быть положительным, попробуйте снова.")
+                continue
+            return value
+        except ValueError:
+            print("  Неверный формат — введите число, например 1.5")
+        except (EOFError, KeyboardInterrupt):
+            return default
+
+
 def main() -> None:
     from grbl_core.machine_config import BAUD, PORT
 
@@ -194,16 +214,38 @@ def main() -> None:
     parser.add_argument("--baud", type=int, default=BAUD)
     parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--demo", action="store_true", help="прогнать движения без клавиатуры")
+    parser.add_argument(
+        "--speed", type=float, default=None, metavar="K",
+        help="множитель подачи (1.0 = без изменений). Если не задан — спросит при запуске.",
+    )
+    parser.add_argument(
+        "--step", type=float, default=None, metavar="K",
+        help="множитель шага (1.0 = без изменений). Если не задан — спросит при запуске.",
+    )
     args = parser.parse_args()
+
+    # --- Интерактивный ввод множителей (только если не переданы флагами) ---
+    if not args.demo:
+        print("=== Настройка пульта ===")
+        speed_k = args.speed if args.speed is not None else _ask_multiplier("Множитель подачи  (скорость ×K)", 1.0)
+        step_k  = args.step  if args.step  is not None else _ask_multiplier("Множитель шага    (расстояние ×K)", 1.0)
+        print(f"  → подача ×{speed_k:g}   шаг ×{step_k:g}")
+        print("========================")
+    else:
+        speed_k = args.speed if args.speed is not None else 1.0
+        step_k  = args.step  if args.step  is not None else 1.0
 
     cnc = GrblCore(port=args.port, baud=args.baud, simulate=args.simulate)
     cnc.on_log = lambda message: print(message)
     cnc.connect()
-    cnc.set_step("X", 5)
-    cnc.set_feed("X", 300)
-    cnc.configure("A", step=20, feed=1000, continuous_window=60)
-    cnc.configure("Y", step=40, feed=1200, continuous_window=80)
-    cnc.configure("Z", step=50, feed=900, continuous_window=50)
+
+    # Базовые значения из конфига, умноженные на множители
+    cnc.set_step("X", 5  * step_k)
+    cnc.set_feed("X", 300 * speed_k)
+    cnc.configure("A", step=20 * step_k, feed=1000 * speed_k, continuous_window=60)
+    cnc.configure("Y", step=40 * step_k, feed=1200 * speed_k, continuous_window=80)
+    cnc.configure("Z", step=50 * step_k, feed=900  * speed_k, continuous_window=50)
+
     try:
         if args.demo:
             demo(cnc)

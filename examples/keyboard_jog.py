@@ -12,6 +12,7 @@
   P         помпа
   U         разблокировать после ALARM ($X)
   I         инфо: статус и настройки платы ($$, MPos)
+  O         инвертировать направление всех осей ($3=0 <-> $3=15)
   B         режим стенда без концевиков ($20=0, $21=0, $22=0)
   M         записать все настройки в Mega (apply_machine)
   , / .     шаг / 2    и   шаг * 2
@@ -135,6 +136,14 @@ def run_keyboard(cnc: GrblCore) -> None:
                 print("разблокировано ($X)")
             except Exception as exc:
                 print(f"разблокировка не удалась: {exc}")
+        elif char == "o":
+            try:
+                cur = int(cnc.refresh_settings().get(3, 0))
+                new_mask = 0 if cur != 0 else 15
+                cnc.set_grbl(3, new_mask)
+                print(f"Инверсия DIR ($3) переключена: {cur} -> {new_mask}")
+            except Exception as exc:
+                print(f"Ошибка смены $3: {exc}")
         elif char == "i":
             st = cnc.get_status()
             pos_str = f"MPos {st.mpos} WPos {st.wpos}" if st else "нет данных"
@@ -208,7 +217,7 @@ def run_keyboard(cnc: GrblCore) -> None:
         return None
 
     show()
-    print("Esc — выход, пробел — стоп, U — разблокировать, I — инфо, B — bench_mode, M — apply_machine, P — помпа")
+    print("Esc — выход, пробел — стоп, U — разблокировать, I — инфо, O — инверсия $3, B — bench_mode, M — apply_machine, P — помпа")
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
 

@@ -179,6 +179,9 @@ class SimSerial:
             return
         upper = line.upper()
         if upper.startswith("$J"):
+            if self.state == "Alarm":
+                self._emit("error:9")  # G-code locked out during alarm
+                return
             self._jog(line.split("=", 1)[1])
             self.state = "Jog"
             self._emit("ok")

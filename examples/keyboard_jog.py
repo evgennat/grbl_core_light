@@ -10,6 +10,7 @@
   R / F     стол A+ / A-
   Пробел    стоп
   P         помпа
+  U         разблокировать после ALARM ($X)
   , / .     шаг / 2    и   шаг * 2
   - / =     подача / 2 и   подача * 2
   1 / 2     режим шага / режим удержания
@@ -125,6 +126,12 @@ def run_keyboard(cnc: GrblCore) -> None:
         elif char == "p":
             cnc.set_pump(not cnc.pump_is_on)
             print("помпа", "вкл" if cnc.pump_is_on else "выкл")
+        elif char == "u":
+            try:
+                cnc.unlock()
+                print("разблокировано ($X)")
+            except Exception as exc:
+                print(f"разблокировка не удалась: {exc}")
         elif char == ",":
             cnc.scale_steps(0.5)
             show()
@@ -176,7 +183,7 @@ def run_keyboard(cnc: GrblCore) -> None:
         return None
 
     show()
-    print("Esc — выход, пробел — стоп, P — помпа")
+    print("Esc — выход, пробел — стоп, U — разблокировать после ALARM, P — помпа")
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
 
@@ -237,6 +244,7 @@ def main() -> None:
 
     cnc = GrblCore(port=args.port, baud=args.baud, simulate=args.simulate)
     cnc.on_log = lambda message: print(message)
+    cnc.on_alarm = lambda msg: print(f"\n!! {msg} — нажмите U для разблокировки")
     cnc.connect()
 
     # Базовые значения из конфига, умноженные на множители

@@ -73,6 +73,7 @@ class GrblCore:
         self._held_event = threading.Event()
         self._stop = threading.Event()
         self._abort = threading.Event()
+        self._alarm_active = False  # взводится при ALARM, снимается при unlock
         self._link: GrblLink | None = None
         self._jog_thread: threading.Thread | None = None
 
@@ -326,6 +327,7 @@ class GrblCore:
         self._link.cycle_start()
 
     def unlock(self) -> None:
+        self._alarm_active = False
         self.command("$X")
 
     def home(self) -> None:
@@ -542,10 +544,31 @@ class GrblCore:
                 status = link.get_status()
                 state = status.state if status is not None else None
 
-                # 1. Если ждем завершения отмены (торможения)
+                # 0. ALARM — контроллер заблокирован, команды не принимаются.
+                #    _alarm_active взводится немедленно через on_alarm (до обновления status).
+                #    Снимается только через unlock(). Также проверяем state на случай
+                #    если ALARM пришёл через статусный поллер, а не через ALARM-строку.
+                if self._alarm_active or (state is not None and state.startswith("Alarm")):
+                    if not self._alarm_active:
+                        self._alarm_active = True  # статус подтверждает Alarm
+                    if latched or cancel_in_progress:
+                        latched = {}
+                        sent_gen = None
+                        cancel_in_progress = False
+                    # Пока ALARM — не пытаемся слать ничего
+                    continue
+
+                # 1. Если ждем завершения отмены (торможения после 0x85)
                 if cancel_in_progress:
                     if state == "Idle":
                         cancel_in_progress = False
+                    elif state is not None and state.startswith("Hold"):
+                        # Hold:0/Hold:1 — GRBL тормозит после jog_cancel
+                        # Это нормальный путь; шлём статус-запрос для ускорения перехода
+                        if time.time() - cancel_time >= 0.5:
+                            link.status_query()
+                            cancel_time = time.time()
+                        continue
                     elif time.time() - cancel_time >= 1.5:
                         # Таймаут ожидания Idle (1.5 с) — повторный запрос статуса
                         link.status_query()
@@ -577,6 +600,11 @@ class GrblCore:
                         cancel_time = time.time()
                         latched = {}
                         sent_gen = None
+                        continue
+
+                    if state is not None and state.startswith("Hold"):
+                        # После стопа или feed_hold — ждём Idle, не шлём
+                        link.status_query()
                         continue
 
                     # Станок в Idle — отправляем новое движение
@@ -645,6 +673,7 @@ class GrblCore:
             self.on_status(status)
 
     def _relay_alarm(self, message: str) -> None:
+        self._alarm_active = True
         self._log(message)
         if self.on_alarm is not None:
             self.on_alarm(message)

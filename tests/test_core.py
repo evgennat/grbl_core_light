@@ -128,6 +128,51 @@ class CoreTest(unittest.TestCase):
         sent = self.cnc.run_program("G21\nG91\nG0 X1\n; comment\n")
         self.assertEqual(sent, 3)
 
+    def test_alarm_stops_jog_and_unlock_resumes(self):
+        """После ALARM jog_loop не двигает станок; $X разблокирует."""
+        # Запускаем движение, ждём первой команды
+        self.cnc.hold("X", +1)
+        self._wait_for(lambda: any(l.startswith("$J") for l in self.cnc.sim.lines))
+        self.cnc.release_all()
+        time.sleep(0.15)
+
+        # Имитируем ALARM: выставляем состояние симулятора и взводим флаг
+        self.cnc.sim.state = "Alarm"
+        self.cnc._relay_alarm("ALARM:1")  # как будто пришёл hard limit
+        pos_before = self.cnc.sim.pos["X"]
+
+        # Пробуем двигаться: симулятор отклонит $J= с error:9, позиция не изменится
+        self.cnc.hold("X", +1)
+        time.sleep(0.30)
+        self.cnc.release_all()
+        time.sleep(0.10)
+        pos_after = self.cnc.sim.pos["X"]
+        self.assertEqual(pos_before, pos_after, "позиция не должна меняться в состоянии Alarm")
+
+        # Разблокируем
+        self.cnc.sim.state = "Idle"
+        self.cnc.unlock()
+
+        # Теперь движение должно возобновиться
+        pos_start = self.cnc.sim.pos["X"]
+        self.cnc.hold("X", +1)
+        self._wait_for(lambda: self.cnc.sim.pos["X"] != pos_start)
+        self.cnc.release_all()
+
+    def test_hold_state_does_not_send_jog(self):
+        """В состоянии Hold jog_loop ждёт Idle, не шлёт команды."""
+        self.cnc.hold("Y", +1)
+        self._wait_for(lambda: any(l.startswith("$J") for l in self.cnc.sim.lines))
+        # Переводим симулятор в Hold (как будто сработал feed_hold)
+        self.cnc.sim.state = "Hold:0"
+        before = list(self.cnc.sim.lines)
+        time.sleep(0.15)
+        after = list(self.cnc.sim.lines)
+        self.assertEqual(before, after, "jog_loop не должен слать команды в состоянии Hold")
+        # Восстанавливаем
+        self.cnc.sim.state = "Idle"
+        self.cnc.release_all()
+
     def _wait_for(self, predicate, timeout=1.5):
         deadline = time.time() + timeout
         while time.time() < deadline:

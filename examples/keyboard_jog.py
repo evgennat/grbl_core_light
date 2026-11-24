@@ -11,6 +11,9 @@
   Пробел    стоп
   P         помпа
   U         разблокировать после ALARM ($X)
+  I         инфо: статус и настройки платы ($$, MPos)
+  B         режим стенда без концевиков ($20=0, $21=0, $22=0)
+  M         записать все настройки в Mega (apply_machine)
   , / .     шаг / 2    и   шаг * 2
   - / =     подача / 2 и   подача * 2
   1 / 2     режим шага / режим удержания
@@ -132,6 +135,28 @@ def run_keyboard(cnc: GrblCore) -> None:
                 print("разблокировано ($X)")
             except Exception as exc:
                 print(f"разблокировка не удалась: {exc}")
+        elif char == "i":
+            st = cnc.get_status()
+            pos_str = f"MPos {st.mpos} WPos {st.wpos}" if st else "нет данных"
+            print(f"[ИНФО] состояние: {st.state if st else '?'}, {pos_str}")
+            try:
+                settings = cnc.refresh_settings()
+                print(f"[ИНФО] $0={settings.get(0)} (пульс) $3={settings.get(3)} (инверсия DIR)")
+                print(f"[ИНФО] $20={settings.get(20)} (soft limits) $21={settings.get(21)} (hard limits) $22={settings.get(22)} (homing)")
+            except Exception as exc:
+                print(f"[ИНФО] ошибка чтения $$: {exc}")
+        elif char == "b":
+            try:
+                cnc.bench_mode()
+                print("Режим стенда применен: $20=0, $21=0, $22=0, $X")
+            except Exception as exc:
+                print(f"Ошибка bench_mode: {exc}")
+        elif char == "m":
+            try:
+                cnc.apply_machine()
+                print("Параметры станка записаны в Mega (apply_machine)")
+            except Exception as exc:
+                print(f"Ошибка apply_machine: {exc}")
         elif char == ",":
             cnc.scale_steps(0.5)
             show()
@@ -183,7 +208,7 @@ def run_keyboard(cnc: GrblCore) -> None:
         return None
 
     show()
-    print("Esc — выход, пробел — стоп, U — разблокировать после ALARM, P — помпа")
+    print("Esc — выход, пробел — стоп, U — разблокировать, I — инфо, B — bench_mode, M — apply_machine, P — помпа")
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
 
@@ -246,6 +271,12 @@ def main() -> None:
     cnc.on_log = lambda message: print(message)
     cnc.on_alarm = lambda msg: print(f"\n!! {msg} — нажмите U для разблокировки")
     cnc.connect()
+
+    try:
+        cnc.apply_machine()
+        print("Настройки станка записаны в Mega ($0, $3, bench_mode $20=0/$21=0/$22=0, шаги, скорости)")
+    except Exception as exc:
+        print(f"Предупреждение: не удалось записать настройки в Mega: {exc}")
 
     # Базовые значения из конфига, умноженные на множители
     cnc.set_step("X", 5  * step_k)

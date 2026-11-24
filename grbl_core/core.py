@@ -489,6 +489,8 @@ class GrblCore:
             self._held_event.set()
 
     def _plan(self, held: dict[str, int], distance: float | None = None) -> tuple[str | None, float]:
+        from grbl_core.machine_config import BENCH_MODE
+
         with self._axes_lock:
             specs = {
                 axis.name: axis
@@ -503,7 +505,8 @@ class GrblCore:
             if not direction or axis is None:
                 continue
             room = axis.continuous_window if distance is None else distance
-            if axis.max_travel > 0 and status is not None:
+            # Программные границы применяются только когда есть концевики (не BENCH_MODE)
+            if not BENCH_MODE and axis.max_travel > 0 and status is not None:
                 pos = status.mpos.get(name, 0.0)
                 if direction > 0:
                     room = min(room, max(0.0, axis.max_travel - pos - 0.05))
@@ -639,6 +642,7 @@ class GrblCore:
                     command, duration = self._plan(held)
                     if not command:
                         continue
+                    self._log(command)
                     reply = link.command(command, timeout=1.0)
                     if reply.ok:
                         last_send_time = time.time()
@@ -651,6 +655,7 @@ class GrblCore:
                     if elapsed >= last_duration * 0.7:
                         command, duration = self._plan(held)
                         if command:
+                            self._log(command)
                             reply = link.command(command, timeout=1.0)
                             if reply.ok:
                                 last_send_time = time.time()
